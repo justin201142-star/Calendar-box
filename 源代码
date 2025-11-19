@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>项目日历</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@^3/dist/tailwind.min.css" rel="stylesheet" />
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+</body>
+</html>
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+import React, { useState } from "react";
+import { motion } from "framer-motion";
+
+function generateMonthDays(year, month) {
+  const date = new Date(year, month, 1);
+  const days = [];
+  while (date.getMonth() === month) {
+    days.push(new Date(date));
+    date.setDate(date.getDate() + 1);
+  }
+  return days;
+}
+
+export default function App() {
+  const now = new Date();
+  const days = generateMonthDays(now.getFullYear(), now.getMonth());
+
+  const [tasks, setTasks] = useState({});
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [newTask, setNewTask] = useState("");
+  const [newColor, setNewColor] = useState("blue");
+  const [dragTask, setDragTask] = useState(null);
+
+  const openDialog = (date) => setSelectedDate(date);
+  const closeDialog = () => {
+    setSelectedDate(null);
+    setNewTask("");
+  };
+
+  const addTask = () => {
+    if (!newTask.trim()) return;
+    const key = selectedDate.toISOString().split("T")[0];
+    const updated = { ...tasks };
+    if (!updated[key]) updated[key] = [];
+    updated[key].push({ text: newTask, color: newColor });
+    setTasks(updated);
+    setNewTask("");
+  };
+
+  const onDragStart = (dateKey, index) => {
+    setDragTask({ dateKey, index, content: tasks[dateKey][index] });
+  };
+
+  const onDrop = (targetDate) => {
+    if (!dragTask) return;
+    const targetKey = targetDate.toISOString().split("T")[0];
+    const updated = { ...tasks };
+
+    updated[dragTask.dateKey].splice(dragTask.index, 1);
+    if (updated[dragTask.dateKey].length === 0) {
+      delete updated[dragTask.dateKey];
+    }
+
+    if (!updated[targetKey]) updated[targetKey] = [];
+    updated[targetKey].push(dragTask.content);
+
+    setTasks(updated);
+    setDragTask(null);
+  };
+
+  // ICS 导出功能（全天事件）
+  const yyyymmdd = (date) => date.toISOString().slice(0, 10).replace(/-/g, "");
+  const nextDayYYYYMMDD = (dateStr) => {
+    const d = new Date(dateStr + "T00:00:00");
+    d.setDate(d.getDate() + 1);
+    return yyyymmdd(d);
+  };
+  const escapeIcsText = (s) => String(s).replace(/([\\,;])/g, "\\$1").replace(/\n/g, "\\n");
+
+  const exportIcsForCurrentMonth = () => {
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const monthStart = new Date(year, month, 1);
+    const monthEnd = new Date(year, month + 1, 0);
+
+    const lines = [];
+    lines.push("BEGIN:VCALENDAR");
+    lines.push("VERSION:2.0");
+    lines.push("PRODID:-//pm-calendar//EN");
+
+    const dtstamp = new Date().toISOString().replace(/[-:.]/g, "").split("Z")[0] + "Z";
+
+    Object.keys(tasks)
+      .sort()
+      .forEach((dateKey) => {
+        const d = new Date(dateKey + "T00:00:00");
+        if (d < monthStart || d > monthEnd) return;
+        (tasks[dateKey] || []).forEach((item, idx) => {
+          const uid = `${dateKey}-${idx}@pm-calendar`;
+          lines.push("BEGIN:VEVENT");
+          lines.push(`UID:${uid}`);
+          lines.push(`DTSTAMP:${dtstamp}`);
+          lines.push(`SUMMARY:${escapeIcsText(item.text)}`);
+          lines.push(`DTSTART;VALUE=DATE:${yyyymmdd(d)}`);
+          lines.push(`DTEND;VALUE=DATE:${nextDayYYYYMMDD(dateKey)}`);
+          lines.push("END:VEVENT");
+        });
+      });
+
+    lines.push("END:VCALENDAR");
+
+    const icsContent = lines.join("\r\n");
+    const blob = new Blob([icsContent], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `calendar-${year}-${String(month + 1).padStart(2, "0")}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="p-4 bg-white rounded shadow-md max-w-3xl mx-auto">
+      <h2 className="text-2xl font-semibold mb-4">项目日历</h2>
+
+      <div className="grid grid-cols-7 gap-2 mb-6">
+        {days.map((d, i) => (
+          <motion.div
+            key={i}
+            whileHover={{ scale: 1.05 }}
+            className="p-2 bg-gray-200 rounded cursor-pointer text-center"
+            onClick={() => openDialog(d)}
+          >
+            {d.getDate()}
+          </motion.div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-2 mb-4">
+        {days.map((d, i) => {
+          const key = d.toISOString().split("T")[0];
+          return (
+            <div
+              key={i}
+              className="p-2 bg-gray-100 rounded h-40 flex flex-col overflow-auto"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => onDrop(d)}
+            >
+              <div className="text-center font-medium">{d.getDate()}</div>
+              <div className="mt-2 space-y-1 flex-1 overflow-auto">
+                {(tasks[key] || []).map((t, idx) => (
+                  <div
+                    key={idx}
+                    draggable
+                    onDragStart={() => onDragStart(key, idx)}
+                    className={`p-1 rounded cursor-move bg-${t.color}-200 text-sm`}
+                  >
+                    {t.text}
+                  </div>
+                ))}
+              </div>
+              <button
+                className="mt-2 border p-1 rounded text-sm"
+                onClick={() => openDialog(d)}
+              >
+                + 添加
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {selectedDate && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center">
+          <div className="bg-white p-4 rounded w-80">
+            <h3 className="font-bold mb-2">
+              添加任务 — {selectedDate.toISOString().split("T")[0]}
+            </h3>
+            <input
+              className="w-full border p-2 rounded mb-2"
+              value={newTask}
+              onChange={(e) => setNewTask(e.target.value)}
+              placeholder="任务内容"
+            />
+            <select
+              className="w-full border p-2 rounded mb-2"
+              value={newColor}
+              onChange={(e) => setNewColor(e.target.value)}
+            >
+              <option value="blue">蓝色</option>
+              <option value="green">绿色</option>
+              <option value="red">红色</option>
+              <option value="yellow">黄色</option>
+            </select>
+            <div className="flex justify-end gap-2">
+              <button
+                className="border px-2 py-1 rounded"
+                onClick={closeDialog}
+              >
+                取消
+              </button>
+              <button
+                className="border px-2 py-1 rounded"
+                onClick={() => {
+                  addTask();
+                  closeDialog();
+                }}
+              >
+                添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end mt-4">
+        <button
+          className="border px-3 py-1 rounded"
+          onClick={exportIcsForCurrentMonth}
+        >
+          导出本月到 .ics
+        </button>
+      </div>
+    </div>
+  );
+}
